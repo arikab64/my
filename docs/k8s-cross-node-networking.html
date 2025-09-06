@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kubernetes Cross-Node Communication Explorer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Chosen Palette: Neutral Tech -->
+    <!-- Application Structure Plan: The application uses a tab-based navigation structure to allow users to select and focus on one networking method at a time (IPIP, VXLAN, BGP). This is more effective than a long scrolling page for comparing complex, multi-step processes. For each method, a dedicated interactive "Packet Journey" visualizer is presented. Users click through sequential steps to see how a packet is transformed and where it is in the network. This step-by-step, user-controlled flow is crucial for making the abstract concepts of encapsulation and routing tangible and easier to understand. This is further enhanced by two new Gemini-powered features: a "Simplify" button for on-demand plain-language explanations and an "Advanced Questions" input to get detailed answers, promoting active and deeper learning. The structure is designed for focused learning and direct comparison, now with integrated AI assistance. -->
+    <!-- Visualization & Content Choices: 
+        - Report Info: Three K8s networking methods. Goal: Explain and compare. Viz: Interactive, tabbed sections. Interaction: User clicks to progress through a visual journey. Justification: Breaks down complex data flows into digestible steps.
+        - Report Info: Packet journey for each method. Goal: Show packet transformation. Viz: A diagram built with HTML/CSS representing the network path (pods, nodes, physical network). A separate dynamic view shows the packet's IP headers. Interaction: As the user clicks "Next Step", the diagram highlights the packet's current location, and the IP header view updates to reflect encapsulation/decapsulation. Justification: Visually connects the theoretical explanation to the concrete changes in the packet structure.
+        - Report Info: Trade-offs between methods. Goal: Summarize for comparison. Viz: Simple HTML table. Interaction: None. Justification: Provides a clear, at-a-glance summary of key differences.
+        - NEW FEATURE: On-demand simplified explanation. Report Info: Current step's description. Goal: Rephrase in simple terms. Viz: A dynamic text block. Interaction: Click a "Simplify" button. Justification: Addresses different learning needs by providing a less technical overview.
+        - NEW FEATURE: Open-ended Q&A. Report Info: User's advanced question. Goal: Provide detailed answer. Viz: A dynamic text block. Interaction: User types a question and submits. Justification: Allows users to explore specific topics beyond the pre-defined journey.
+        - Library/Method: All visuals are created using HTML and Tailwind CSS for structure and styling. All interactions are powered by vanilla JavaScript. The new features use the Gemini API for text generation. No Chart.js or Plotly.js needed.
+    -->
+    <!-- CONFIRMATION: NO SVG graphics used. NO Mermaid JS used. -->
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f8fafc;
+        }
+        .tab-btn {
+            transition: all 0.3s ease;
+        }
+        .tab-btn.active {
+            background-color: #3b82f6;
+            color: white;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+        }
+        .step-highlight {
+            outline: 3px solid #3b82f6;
+            box-shadow: 0 0 15px rgba(59, 130, 246, 0.5);
+            transform: scale(1.03);
+            transition: all 0.3s ease-in-out;
+        }
+        .packet-flow-line {
+            position: absolute;
+            left: 50%;
+            top: 100%;
+            width: 2px;
+            height: 2rem;
+            background-color: #9ca3af;
+            transform: translateX(-50%);
+        }
+        .packet-header {
+            border: 1px solid #e5e7eb;
+            background-color: #f9fafb;
+            padding: 0.5rem;
+            margin-top: 0.25rem;
+            font-family: monospace;
+            font-size: 0.8rem;
+            letter-spacing: 0.5px;
+            border-radius: 0.375rem;
+            position: relative;
+            overflow: hidden;
+        }
+        .packet-header-outer {
+            border-color: #60a5fa;
+            background-color: #eff6ff;
+        }
+        .packet-header .label {
+            font-weight: 600;
+            color: #1d4ed8;
+            font-size: 0.65rem;
+            display: block;
+            margin-bottom: 2px;
+        }
+         .packet-header .label-inner {
+            color: #15803d;
+        }
+        .packet-header-inner {
+            border-color: #4ade80;
+            background-color: #f0fdf4;
+        }
+        .disabled-btn {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body class="text-slate-700">
+    <div id="app" class="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
+        <header class="text-center mb-10">
+            <h1 class="text-4xl font-bold text-slate-800 tracking-tight">Kubernetes Cross-Node Communication</h1>
+            <p class="mt-3 text-lg text-slate-600 max-w-3xl mx-auto">An interactive guide to understanding how pods talk to each other across different nodes in a cluster.</p>
+        </header>
+
+        <nav class="flex justify-center mb-8 bg-slate-100 p-2 rounded-xl shadow-inner max-w-md mx-auto">
+            <button data-tab="ipip" class="tab-btn flex-1 py-2 px-4 rounded-lg font-semibold text-slate-600">IPIP</button>
+            <button data-tab="vxlan" class="tab-btn flex-1 py-2 px-4 rounded-lg font-semibold text-slate-600">VXLAN</button>
+            <button data-tab="bgp" class="tab-btn flex-1 py-2 px-4 rounded-lg font-semibold text-slate-600">BGP</button>
+        </nav>
+
+        <main id="content-container">
+            <!-- Content for each tab will be injected here by JS -->
+        </main>
+
+        <section id="summary-section" class="mt-16">
+            <h2 class="text-3xl font-bold text-slate-800 text-center mb-6">Comparison of Methods</h2>
+            <div class="overflow-x-auto bg-white rounded-lg shadow-lg p-1">
+                <table class="w-full text-left">
+                    <thead class="bg-slate-50 border-b border-slate-200">
+                        <tr>
+                            <th class="p-4 font-semibold">Method</th>
+                            <th class="p-4 font-semibold">Mechanism</th>
+                            <th class="p-4 font-semibold">Performance</th>
+                            <th class="p-4 font-semibold">Infrastructure Compatibility</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-200">
+                        <tr>
+                            <td class="p-4 font-medium text-blue-600">IP-in-IP (IPIP)</td>
+                            <td class="p-4">Encapsulates IP packets within another IP packet.</td>
+                            <td class="p-4">Good. Minor overhead from the extra IP header.</td>
+                            <td class="p-4">High. Works on most networks that can route IP. May be blocked by some cloud providers.</td>
+                        </tr>
+                        <tr>
+                            <td class="p-4 font-medium text-emerald-600">VXLAN</td>
+                            <td class="p-4">Creates a Layer 2 overlay network on top of a Layer 3 network. Encapsulates Ethernet frames in UDP packets.</td>
+                            <td class="p-4">Fair. Slightly more overhead than IPIP due to UDP and VXLAN headers.</td>
+                            <td class="p-4">Very High. Works almost anywhere as it uses standard UDP packets.</td>
+                        </tr>
+                        <tr>
+                            <td class="p-4 font-medium text-purple-600">BGP</td>
+                            <td class="p-4">Advertises pod CIDR routes directly to the physical network. No encapsulation.</td>
+                            <td class="p-4">Excellent. Near-native performance as there is no encapsulation overhead.</td>
+                            <td class="p-4">Low. Requires network hardware that supports BGP and configuration access.</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </div>
+
+<script>
+const appData = {
+    ipip: {
+        title: "IP-in-IP (IPIP) Encapsulation",
+        description: "IPIP is a straightforward tunneling protocol that wraps an IP packet inside another IP packet. In Kubernetes, this means the original packet from the source pod is wrapped in a new packet with the source and destination node IPs. This allows the packet to be routed across the underlying physical network without the network needing to know about pod IPs.",
+        steps: [
+            { id: 'pod-a', title: 'Packet Origin', description: 'A packet is created in Pod A, destined for Pod B. The source and destination IPs are the pods\' internal cluster IPs.', packet: { inner: { src: '10.1.1.2', dst: '10.1.2.2' } } },
+            { id: 'node-1-routing', title: 'Node 1: Routing Decision', description: 'The packet leaves Pod A and enters the root network namespace of Node 1. The node\'s routing table determines that the destination pod IP (10.1.2.2) is on a different node and must be sent via the `tunl0` virtual interface.', packet: { inner: { src: '10.1.1.2', dst: '10.1.2.2' } } },
+            { id: 'node-1-encap', title: 'Node 1: IPIP Encapsulation', description: 'The packet is passed to the `tunl0` interface, which performs IPIP encapsulation. It wraps the original packet in a new IP header using the node IPs as the source and destination.', packet: { outer: { src: '192.168.1.10', dst: '192.168.1.20', proto: 'IPIP' }, inner: { src: '10.1.1.2', dst: '10.1.2.2' } } },
+            { id: 'physical-network', title: 'Physical Network Transit', description: 'The newly encapsulated packet is sent out from Node 1\'s physical interface (eth0). The underlying network routes it like any normal packet, using the outer node IPs.', packet: { outer: { src: '192.168.1.10', dst: '192.168.1.20', proto: 'IPIP' }, inner: { src: '10.1.1.2', dst: '10.1.2.2' } } },
+            { id: 'node-2-decap', title: 'Node 2: Decapsulation', description: 'Node 2 receives the packet on its physical interface. The kernel inspects the protocol type, sees it\'s IPIP, and decapsulates it, extracting the original inner packet.', packet: { inner: { src: '10.1.1.2', dst: '10.1.2.2' } } },
+            { id: 'node-2-routing', title: 'Node 2: Final Routing', description: 'With the original packet restored, Node 2\'s routing table looks at the destination pod IP (10.1.2.2) and forwards it to the correct virtual interface connected to Pod B.', packet: { inner: { src: '10.1.1.2', dst: '10.1.2.2' } } },
+            { id: 'pod-b', title: 'Packet Arrival', description: 'The packet successfully arrives at Pod B. The entire encapsulation and network transit is transparent to the pods.', packet: { inner: { src: '10.1.1.2', dst: '10.1.2.2' } } },
+        ]
+    },
+    vxlan: {
+        title: "VXLAN (Virtual Extensible LAN)",
+        description: "VXLAN creates a Layer 2 overlay network on top of an existing Layer 3 network. It encapsulates Layer 2 Ethernet frames within standard UDP packets. This is highly compatible with existing network infrastructure, as most networks are configured to handle UDP traffic without issue.",
+        steps: [
+            { id: 'pod-a', title: 'Packet Origin', description: 'Pod A creates an IP packet for Pod B. This packet is contained within an Ethernet frame.', packet: { inner: { src: '10.1.1.2', dst: '10.1.2.2' } } },
+            { id: 'node-1-bridge', title: 'Node 1: Bridge Forwarding', description: 'The frame leaves Pod A and hits the CNI bridge (`cni0`). The bridge learns that the destination MAC address (for Pod B) is reachable via the VXLAN Tunnel Endpoint (VTEP) interface, `vxlan.1`.', packet: { inner: { src: '10.1.1.2', dst: '10.1.2.2' } } },
+            { id: 'node-1-encap', title: 'Node 1: VXLAN Encapsulation', description: 'The `vxlan.1` interface encapsulates the entire Ethernet frame in a VXLAN header and then wraps it all in a UDP/IP packet. The destination IP is the VTEP on Node 2.', packet: { outer: { src: '192.168.1.10', dst: '192.168.1.20', proto: 'UDP (VXLAN)' }, inner: { src: '10.1.1.2', dst: '10.1.2.2', L2: 'Ethernet Frame' } } },
+            { id: 'physical-network', title: 'Physical Network Transit', description: 'The outer UDP packet is sent from Node 1. The physical network routes it to Node 2 based on the node IPs. The network is unaware of the VXLAN tunnel.', packet: { outer: { src: '192.168.1.10', dst: '192.168.1.20', proto: 'UDP (VXLAN)' }, inner: { src: '10.1.1.2', dst: '10.1.2.2', L2: 'Ethernet Frame' } } },
+            { id: 'node-2-decap', title: 'Node 2: Decapsulation', description: 'Node 2 receives the UDP packet. The kernel identifies it as VXLAN traffic (via the destination port) and passes it to the `vxlan.1` interface for decapsulation. The original Ethernet frame is extracted.', packet: { inner: { src: '10.1.1.2', dst: '10.1.2.2', L2: 'Ethernet Frame' } } },
+            { id: 'node-2-bridge', title: 'Node 2: Bridge Forwarding', description: 'The extracted frame is placed on the `cni0` bridge on Node 2. The bridge examines the destination MAC address and forwards the frame to the virtual interface connected to Pod B.', packet: { inner: { src: '10.1.1.2', dst: '10.1.2.2', L2: 'Ethernet Frame' } } },
+            { id: 'pod-b', title: 'Packet Arrival', description: 'The frame and its containing IP packet arrive at Pod B. The overlay network has successfully connected the two pods as if they were on the same Layer 2 network.', packet: { inner: { src: '10.1.1.2', dst: '10.1.2.2' } } },
+        ]
+    },
+    bgp: {
+        title: "BGP (Border Gateway Protocol)",
+        description: "Using BGP, each node in the cluster peers with the physical network (or with each other in a full mesh) and advertises the pod IP ranges it is responsible for. This makes the physical network aware of the pod network, eliminating the need for encapsulation. Packets are routed natively.",
+        steps: [
+            { id: 'pod-a', title: 'Packet Origin', description: 'Pod A creates a standard IP packet destined for Pod B. No special handling is needed within the pod.', packet: { inner: { src: '10.1.1.2', dst: '10.1.2.2' } } },
+            { id: 'node-1-routing', title: 'Node 1: Forward to Gateway', description: 'The packet leaves Pod A. The routing table on Node 1 (configured by Calico/BGP agent) states that the entire pod network is reachable via the physical network\'s gateway. The packet is sent to the gateway, unencapsulated.', packet: { inner: { src: '10.1.1.2', dst: '10.1.2.2' } } },
+            { id: 'physical-network', title: 'Physical Network: Native Routing', description: 'The physical router receives the packet. Because the K8s nodes have used BGP to advertise routes, the router knows that the 10.1.2.0/24 subnet is handled by Node 2 (192.168.1.20). It forwards the packet directly.', packet: { inner: { src: '10.1.1.2', dst: '10.1.2.2' } } },
+            { id: 'node-2-receive', title: 'Node 2: Packet Reception', description: 'Node 2 receives the packet on its physical interface. Since there is no outer header, the packet is immediately ready for processing.', packet: { inner: { src: '10.1.1.2', dst: '10.1.2.2' } } },
+            { id: 'node-2-routing', title: 'Node 2: Final Routing', description: 'Node 2\'s kernel consults its local routing table. It identifies 10.1.2.2 as being connected to Pod B\'s virtual interface and forwards the packet accordingly.', packet: { inner: { src: '10.1.1.2', dst: '10.1.2.2' } } },
+            { id: 'pod-b', title: 'Packet Arrival', description: 'The packet arrives at Pod B. This method offers the highest performance due to the absence of any encapsulation overhead.', packet: { inner: { src: '10.1.1.2', dst: '10.1.2.2' } } },
+        ]
+    }
+};
+let currentTab = 'ipip';
+let currentStep = 0;
+let simplifiedTextCache = {};
+
+function generatePacketHtml(packet) {
+    if (!packet) return '';
+    let html = '';
+    if (packet.outer) {
+        html += `<div class="packet-header packet-header-outer">
+            <span class="label">OUTER</span>
+            <strong>SRC:</strong> ${packet.outer.src} | <strong>DST:</strong> ${packet.outer.dst}<br/>
+            <strong>PROTO:</strong> ${packet.outer.proto}
+        </div>`;
+    }
+    if (packet.inner) {
+        html += `<div class="packet-header packet-header-inner">
+             <span class="label label-inner">${packet.outer ? 'INNER' : 'PACKET'}</span>
+            <strong>SRC:</strong> ${packet.inner.src} | <strong>DST:</strong> ${packet.inner.dst}
+            ${packet.inner.L2 ? `<br/><strong>L2:</strong> ${packet.inner.L2}` : ''}
+        </div>`;
+    }
+    return html;
+}
+
+function renderContent(tab) {
+    const data = appData[tab];
+    currentStep = 0;
+    simplifiedTextCache = {};
+
+    const contentContainer = document.getElementById('content-container');
+    contentContainer.innerHTML = `
+        <div id="${tab}-content" class="method-content bg-white p-6 sm:p-8 rounded-2xl shadow-xl">
+            <div class="text-center mb-8">
+                <h2 class="text-3xl font-bold text-slate-800">${data.title}</h2>
+                <p class="mt-2 text-slate-600 max-w-2xl mx-auto">${data.description}</p>
+            </div>
+
+            <!-- Visualizer -->
+            <div class="mb-8 p-4 bg-slate-50 rounded-lg">
+                <div class="grid grid-cols-1 md:grid-cols-5 gap-4 items-center text-center text-sm font-medium">
+                    <!-- Pod A -->
+                    <div id="vis-pod-a" class="vis-element border-2 border-dashed border-sky-400 bg-sky-50 rounded-lg p-3 relative">
+                        Pod A <br> <span class="text-xs font-mono">10.1.1.2</span>
+                        <div class="packet-flow-line"></div>
+                    </div>
+                    <!-- Node 1 -->
+                    <div id="vis-node-1" class="vis-element border-2 border-solid border-slate-400 bg-slate-100 rounded-lg p-3 space-y-2 relative">
+                         <div id="vis-node-1-routing">Node Logic</div>
+                         <div id="vis-node-1-encap">Encapsulation</div>
+                         <div class="packet-flow-line"></div>
+                    </div>
+                    <!-- Network -->
+                    <div id="vis-physical-network" class="vis-element border-2 border-solid border-slate-400 bg-slate-100 rounded-lg p-3 relative">
+                        Physical Network <br> <span class="text-xs font-mono">192.168.1.0/24</span>
+                        <div class="packet-flow-line"></div>
+                    </div>
+                    <!-- Node 2 -->
+                    <div id="vis-node-2" class="vis-element border-2 border-solid border-slate-400 bg-slate-100 rounded-lg p-3 space-y-2 relative">
+                         <div id="vis-node-2-decap">Decapsulation</div>
+                         <div id="vis-node-2-routing">Node Logic</div>
+                         <div class="packet-flow-line"></div>
+                    </div>
+                    <!-- Pod B -->
+                    <div id="vis-pod-b" class="vis-element border-2 border-dashed border-sky-400 bg-sky-50 rounded-lg p-3">
+                        Pod B <br> <span class="text-xs font-mono">10.1.2.2</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step Controls and Info -->
+            <div class="flex flex-col md:flex-row gap-6">
+                <div class="md:w-1/2 flex-shrink-0">
+                    <h3 class="font-bold text-lg mb-2">Packet Journey Control</h3>
+                    <div class="flex items-center gap-4 mb-4">
+                        <button id="prev-btn" class="px-4 py-2 bg-slate-200 text-slate-700 font-semibold rounded-lg hover:bg-slate-300 transition">&larr; Previous</button>
+                        <div class="flex-grow text-center">
+                            <span id="step-counter" class="font-semibold text-slate-800">Step 1 / ${data.steps.length}</span>
+                        </div>
+                        <button id="next-btn" class="px-4 py-2 bg-blue-500 text-white font-semibold rounded-lg hover:bg-blue-600 transition">Next &rarr;</button>
+                    </div>
+                    <div id="step-info" class="bg-blue-50 border-l-4 border-blue-400 p-4 rounded-r-lg">
+                        <h4 id="step-title" class="font-bold text-blue-900"></h4>
+                        <p id="step-description" class="text-blue-800 mt-1"></p>
+                    </div>
+                </div>
+                <div class="md:w-1/2">
+                    <h3 class="font-bold text-lg mb-2">Packet Headers (Current Step)</h3>
+                    <div id="packet-display" class="min-h-[100px]">
+                        <!-- Packet headers will be rendered here -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Gemini Features -->
+            <div class="mt-8 flex flex-col gap-6">
+                <div>
+                    <button id="simplify-btn" class="px-4 py-2 bg-emerald-500 text-white font-semibold rounded-lg hover:bg-emerald-600 transition flex items-center gap-2">
+                        <span>✨ Simplify This Step</span>
+                        <div id="simplify-spinner" class="hidden spinner h-4 w-4 rounded-full border-2 border-white border-t-transparent animate-spin"></div>
+                    </button>
+                    <div id="simplified-output" class="mt-4 bg-emerald-50 border-l-4 border-emerald-400 p-4 rounded-r-lg hidden">
+                        <h4 class="font-bold text-emerald-900">Simplified Explanation</h4>
+                        <p id="simplified-text" class="text-emerald-800 mt-1"></p>
+                    </div>
+                </div>
+                <div>
+                    <h3 class="font-bold text-lg mb-2">Ask an Advanced Question ✨</h3>
+                    <div class="flex flex-col md:flex-row gap-4">
+                        <input id="advanced-input" type="text" placeholder="e.g., How does tc (Traffic Control) fit into this?" class="flex-grow p-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"/>
+                        <button id="ask-btn" class="px-4 py-2 bg-purple-500 text-white font-semibold rounded-lg hover:bg-purple-600 transition flex-shrink-0 flex items-center gap-2">
+                            <span>Ask</span>
+                            <div id="ask-spinner" class="hidden spinner h-4 w-4 rounded-full border-2 border-white border-t-transparent animate-spin"></div>
+                        </button>
+                    </div>
+                    <div id="advanced-output" class="mt-4 bg-purple-50 border-l-4 border-purple-400 p-4 rounded-r-lg hidden">
+                        <h4 class="font-bold text-purple-900">Answer</h4>
+                        <p id="advanced-text" class="text-purple-800 mt-1"></p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    document.getElementById('prev-btn').addEventListener('click', () => changeStep(-1));
+    document.getElementById('next-btn').addEventListener('click', () => changeStep(1));
+    document.getElementById('simplify-btn').addEventListener('click', getSimplifiedExplanation);
+    document.getElementById('ask-btn').addEventListener('click', getAdvancedAnswer);
+    document.getElementById('advanced-input').addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') getAdvancedAnswer();
+    });
+
+    updateStepDisplay();
+}
+
+function updateStepDisplay() {
+    const data = appData[currentTab].steps;
+    const step = data[currentStep];
+
+    document.getElementById('step-counter').innerText = `Step ${currentStep + 1} / ${data.length}`;
+    document.getElementById('step-title').innerText = step.title;
+    document.getElementById('step-description').innerText = step.description;
+    document.getElementById('packet-display').innerHTML = generatePacketHtml(step.packet);
+    
+    document.querySelectorAll('.vis-element, .vis-element div').forEach(el => el.classList.remove('step-highlight'));
+    
+    let elementToHighlight;
+    switch (step.id) {
+        case 'pod-a': elementToHighlight = document.getElementById('vis-pod-a'); break;
+        case 'node-1-routing': elementToHighlight = document.getElementById('vis-node-1-routing'); break;
+        case 'node-1-encap': elementToHighlight = document.getElementById('vis-node-1-encap'); break;
+        case 'physical-network': elementToHighlight = document.getElementById('vis-physical-network'); break;
+        case 'node-2-decap': elementToHighlight = document.getElementById('vis-node-2-decap'); break;
+        case 'node-2-routing': elementToHighlight = document.getElementById('vis-node-2-routing'); break;
+        case 'pod-b': elementToHighlight = document.getElementById('vis-pod-b'); break;
+        case 'node-1-bridge':
+            elementToHighlight = document.getElementById('vis-node-1-routing');
+            if (elementToHighlight) elementToHighlight.innerText = 'Bridge Forwarding';
+            break;
+        case 'node-2-bridge':
+            elementToHighlight = document.getElementById('vis-node-2-routing');
+            if (elementToHighlight) elementToHighlight.innerText = 'Bridge Forwarding';
+            break;
+        case 'node-2-receive':
+            elementToHighlight = document.getElementById('vis-node-2');
+            break;
+        default:
+            elementToHighlight = document.getElementById('vis-' + step.id);
+    }
+    
+    if(currentTab === 'bgp'){
+      const encap = document.getElementById('vis-node-1-encap');
+      const decap = document.getElementById('vis-node-2-decap');
+      if (encap) encap.style.display = 'none';
+      if (decap) decap.style.display = 'none';
+      if(elementToHighlight === document.getElementById('vis-node-1-routing')) elementToHighlight.innerText = "Forward to Gateway";
+    }
+
+    if (elementToHighlight) {
+        elementToHighlight.classList.add('step-highlight');
+    }
+
+    const prevBtn = document.getElementById('prev-btn');
+    const nextBtn = document.getElementById('next-btn');
+
+    prevBtn.disabled = currentStep === 0;
+    nextBtn.disabled = currentStep === data.length - 1;
+    prevBtn.classList.toggle('disabled-btn', currentStep === 0);
+    nextBtn.classList.toggle('disabled-btn', currentStep === data.length - 1);
+    
+    document.getElementById('simplified-output').classList.add('hidden');
+    document.getElementById('simplified-text').innerText = '';
+    document.getElementById('advanced-output').classList.add('hidden');
+    document.getElementById('advanced-text').innerText = '';
+}
+
+function changeStep(direction) {
+    const numSteps = appData[currentTab].steps.length;
+    const newStep = currentStep + direction;
+    if (newStep >= 0 && newStep < numSteps) {
+        currentStep = newStep;
+        updateStepDisplay();
+    }
+}
+
+async function getSimplifiedExplanation() {
+    const stepDescription = appData[currentTab].steps[currentStep].description;
+    const cacheKey = `${currentTab}-${currentStep}`;
+
+    if (simplifiedTextCache[cacheKey]) {
+        document.getElementById('simplified-text').innerText = simplifiedTextCache[cacheKey];
+        document.getElementById('simplified-output').classList.remove('hidden');
+        return;
+    }
+
+    const simplifyBtn = document.getElementById('simplify-btn');
+    simplifyBtn.disabled = true;
+    document.getElementById('simplify-spinner').classList.remove('hidden');
+    document.getElementById('simplified-output').classList.add('hidden');
+
+    const apiKey = "";
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+
+    const systemPrompt = "You are a friendly and encouraging Kubernetes networking tutor. Your job is to take a technical concept and explain it in a single, easy-to-understand sentence, using an analogy if possible.";
+    const userQuery = `Simplify this explanation: "${stepDescription}"`;
+    
+    const payload = {
+        contents: [{ parts: [{ text: userQuery }] }],
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+    };
+
+    try {
+        const response = await fetch(apiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const result = await response.json();
+        const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (text) {
+            simplifiedTextCache[cacheKey] = text;
+            document.getElementById('simplified-text').innerText = text;
+            document.getElementById('simplified-output').classList.remove('hidden');
+        } else {
+            document.getElementById('simplified-text').innerText = "Sorry, I couldn't generate a simplified explanation right now.";
+            document.getElementById('simplified-output').classList.remove('hidden');
+        }
+    } catch (e) {
+        document.getElementById('simplified-text').innerText = "An error occurred. Please try again.";
+        document.getElementById('simplified-output').classList.remove('hidden');
+    } finally {
+        simplifyBtn.disabled = false;
+        document.getElementById('simplify-spinner').classList.add('hidden');
+    }
+}
+
+async function getAdvancedAnswer() {
+    const question = document.getElementById('advanced-input').value;
+    if (!question.trim()) return;
+
+    const askBtn = document.getElementById('ask-btn');
+    askBtn.disabled = true;
+    document.getElementById('ask-spinner').classList.remove('hidden');
+    document.getElementById('advanced-output').classList.add('hidden');
+    document.getElementById('advanced-text').innerText = '';
+
+    const apiKey = "";
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+    
+    const systemPrompt = "You are a world-class Kubernetes networking expert. Answer the user's question with a detailed, accurate, and concise explanation.";
+    const userQuery = `Answer this question about Kubernetes networking: "${question}"`;
+
+    const payload = {
+        contents: [{ parts: [{ text: userQuery }] }],
+        tools: [{ "google_search": {} }],
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+    };
+
+    try {
+        const response = await fetch(apiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const result = await response.json();
+        const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (text) {
+            document.getElementById('advanced-text').innerText = text;
+            document.getElementById('advanced-output').classList.remove('hidden');
+        } else {
+            document.getElementById('advanced-text').innerText = "Sorry, I couldn't find an answer to that question. Please try rephrasing.";
+            document.getElementById('advanced-output').classList.remove('hidden');
+        }
+    } catch (e) {
+        document.getElementById('advanced-text').innerText = "An error occurred. Please try again.";
+        document.getElementById('advanced-output').classList.remove('hidden');
+    } finally {
+        askBtn.disabled = false;
+        document.getElementById('ask-spinner').classList.add('hidden');
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const tabs = document.querySelectorAll('.tab-btn');
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            currentTab = tab.dataset.tab;
+            tabs.forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            renderContent(currentTab);
+        });
+    });
+
+    // Initial load
+    document.querySelector('.tab-btn[data-tab="ipip"]').classList.add('active');
+    renderContent('ipip');
+});
+</script>
+</body>
+</html>
+
